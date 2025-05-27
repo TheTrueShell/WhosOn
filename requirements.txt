@@ -1,0 +1,4 @@
+py-cord
+mcstatus
+python-dotenv
+aiofiles
