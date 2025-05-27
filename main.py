@@ -291,6 +291,68 @@ def check_bot_permissions(guild):
     
     return missing
 
+async def verify_category_permissions(category, guild):
+    """Verify and fix bot permissions on the category"""
+    bot_member = guild.me
+    category_perms = category.permissions_for(bot_member)
+    
+    logger.debug(f"Checking category permissions for '{category.name}' in {guild.name}")
+    
+    required_perms = {
+        "manage_channels": category_perms.manage_channels,
+        "view_channel": category_perms.view_channel,
+        "send_messages": category_perms.send_messages,
+        "embed_links": category_perms.embed_links,
+        "read_message_history": category_perms.read_message_history,
+        "manage_messages": category_perms.manage_messages,
+        "connect": category_perms.connect,
+        "manage_roles": category_perms.manage_roles
+    }
+    
+    missing_perms = [perm for perm, has in required_perms.items() if not has]
+    
+    if missing_perms:
+        logger.warning(f"Missing category permissions in {guild.name}: {missing_perms}")
+        try:
+            # Try to fix the permissions
+            logger.info(f"Attempting to fix category permissions in {guild.name}")
+            await category.set_permissions(
+                bot_member,
+                manage_channels=True,
+                view_channel=True,
+                send_messages=True,
+                embed_links=True,
+                read_message_history=True,
+                manage_messages=True,
+                connect=True,
+                manage_roles=True,
+                overwrite=True
+            )
+            logger.info(f"Successfully fixed category permissions in {guild.name}")
+            return True
+        except discord.Forbidden:
+            logger.error(f"Could not fix category permissions in {guild.name} - insufficient privileges")
+            return False
+        except Exception as e:
+            logger.error(f"Error fixing category permissions in {guild.name}: {e}")
+            return False
+    else:
+        logger.debug(f"Category permissions verified successfully in {guild.name}")
+        return True
+
+def generate_invite_link(guild=None):
+    """Generate an invite link with the required permissions"""
+    permissions = discord.Permissions(
+        manage_channels=True,
+        manage_roles=True,
+        view_channel=True,
+        send_messages=True,
+        embed_links=True,
+        read_message_history=True,
+        use_slash_commands=True
+    )
+    return discord.utils.oauth_url(bot.user.id, permissions=permissions, guild=guild)
+
 @bot.event
 async def on_ready():
     logger.info(f'{bot.user} has connected to Discord!')
@@ -334,16 +396,7 @@ async def add_server(
         missing = check_bot_permissions(ctx.guild)
         if missing:
             # Generate invite link with required permissions
-            permissions = discord.Permissions(
-                manage_channels=True,
-                manage_roles=True,
-                view_channel=True,
-                send_messages=True,
-                embed_links=True,
-                read_message_history=True,
-                use_slash_commands=True
-            )
-            invite_link = discord.utils.oauth_url(bot.user.id, permissions=permissions, guild=ctx.guild)
+            invite_link = generate_invite_link(ctx.guild)
             
             embed = discord.Embed(
                 title="❌ Missing Permissions",
@@ -409,7 +462,102 @@ async def add_server(
         category = discord.utils.get(ctx.guild.categories, name="WhosOn Tracking")
         if not category:
             logger.info("Creating WhosOn Tracking category")
-            category = await ctx.guild.create_category("WhosOn Tracking")
+            
+            # Check bot permissions before attempting to create category
+            bot_member = ctx.guild.me
+            guild_perms = bot_member.guild_permissions
+            
+            required_guild_perms = {
+                "manage_channels": guild_perms.manage_channels,
+                "manage_roles": guild_perms.manage_roles,
+                "view_channel": guild_perms.view_channel,
+                "send_messages": guild_perms.send_messages,
+                "embed_links": guild_perms.embed_links,
+                "read_message_history": guild_perms.read_message_history,
+            }
+            
+            missing_guild_perms = [perm for perm, has in required_guild_perms.items() if not has]
+            
+            if missing_guild_perms:
+                logger.error(f"Missing guild permissions for category creation: {missing_guild_perms}")
+                embed = discord.Embed(
+                    title="❌ Missing Permissions",
+                    description=f"The bot is missing required guild permissions to create the category:",
+                    color=COLOR_OFFLINE
+                )
+                embed.add_field(
+                    name="Missing Permissions",
+                    value="\n".join([f"• {perm.replace('_', ' ').title()}" for perm in missing_guild_perms]),
+                    inline=False
+                )
+                embed.add_field(
+                    name="💡 Solution",
+                    value="Please grant the bot these permissions in Server Settings > Roles, or use the `/permissions` command to check for issues.\n\n[Re-invite bot with correct permissions]({generate_invite_link(ctx.guild)})",
+                    inline=False
+                )
+                await ctx.followup.send(embed=embed)
+                return
+            
+            # Create permission overwrites for the category to ensure bot has proper permissions
+            category_overwrites = {
+                ctx.guild.me: discord.PermissionOverwrite(
+                    manage_channels=True,
+                    view_channel=True,
+                    send_messages=True,
+                    embed_links=True,
+                    read_message_history=True,
+                    manage_messages=True,
+                    connect=True,
+                    manage_roles=True
+                )
+            }
+            
+            try:
+                category = await ctx.guild.create_category(
+                    "WhosOn Tracking",
+                    overwrites=category_overwrites
+                )
+                logger.info("Created WhosOn Tracking category with bot permissions")
+            except discord.Forbidden as e:
+                logger.error(f"Failed to create category despite permission check: {e}")
+                embed = discord.Embed(
+                    title="❌ Category Creation Failed",
+                    description="Failed to create the 'WhosOn Tracking' category despite having the required permissions.",
+                    color=COLOR_OFFLINE
+                )
+                embed.add_field(
+                    name="Error Details",
+                    value=f"Discord Error: {e}",
+                    inline=False
+                )
+                embed.add_field(
+                    name="💡 Possible Solutions",
+                    value="1. Check if the bot's role is high enough in the role hierarchy\n"
+                          "2. Ensure the bot has 'Administrator' permission (if needed)\n"
+                          "3. Try manually granting 'Manage Channels' permission\n"
+                          "4. Check if there are any channel/category limits reached",
+                    inline=False
+                )
+                await ctx.followup.send(embed=embed)
+                return
+            except Exception as e:
+                logger.error(f"Unexpected error creating category: {e}")
+                embed = discord.Embed(
+                    title="❌ Unexpected Error",
+                    description=f"An unexpected error occurred while creating the category: {str(e)}",
+                    color=COLOR_OFFLINE
+                )
+                await ctx.followup.send(embed=embed)
+                return
+        
+        # Verify category permissions are set correctly (for both new and existing categories)
+        category_perms_ok = await verify_category_permissions(category, ctx.guild)
+        if not category_perms_ok:
+            embed.add_field(
+                name="⚠️ Warning",
+                value="Could not ensure bot has proper category permissions. Channel creation may fail.",
+                inline=False
+            )
         
         # Create voice channel for stats
         voice_channel_name = f"📊 {nickname or address}"
@@ -509,11 +657,77 @@ async def add_server(
     except Exception as e:
         logger.error(f"Error adding server: {e}")
         logger.error(traceback.format_exc())
-        embed = discord.Embed(
-            title="❌ Error",
-            description=f"An error occurred while adding the server: {str(e)}",
-            color=COLOR_OFFLINE
-        )
+        
+        # Provide more specific error information
+        if isinstance(e, discord.Forbidden):
+            # Check what permissions are missing
+            bot_member = ctx.guild.me
+            guild_perms = bot_member.guild_permissions
+            
+            missing_perms = []
+            if not guild_perms.manage_channels:
+                missing_perms.append("Manage Channels")
+            if not guild_perms.manage_roles:
+                missing_perms.append("Manage Roles")
+            if not guild_perms.send_messages:
+                missing_perms.append("Send Messages")
+            if not guild_perms.embed_links:
+                missing_perms.append("Embed Links")
+            if not guild_perms.read_message_history:
+                missing_perms.append("Read Message History")
+            
+            embed = discord.Embed(
+                title="❌ Permission Error",
+                description="The bot lacks the necessary permissions to complete this operation.",
+                color=COLOR_OFFLINE
+            )
+            
+            if missing_perms:
+                embed.add_field(
+                    name="Missing Permissions",
+                    value="\n".join([f"• {perm}" for perm in missing_perms]),
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Permission Issue",
+                    value="The bot has the required guild permissions, but may be blocked by role hierarchy or channel-specific restrictions.",
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="💡 Solutions",
+                value="1. Grant the missing permissions in Server Settings > Roles\n"
+                      "2. Move the bot's role higher in the role hierarchy\n"
+                      "3. Use `/permissions` command to diagnose issues\n"
+                      "4. Check if there are channel/category limits reached\n\n"
+                      f"[Re-invite bot with correct permissions]({generate_invite_link(ctx.guild)})",
+                inline=False
+            )
+            
+        elif isinstance(e, discord.HTTPException):
+            embed = discord.Embed(
+                title="❌ Discord API Error",
+                description=f"Discord returned an error: {e}",
+                color=COLOR_OFFLINE
+            )
+            embed.add_field(
+                name="Error Code",
+                value=f"{e.status} - {e.text}" if hasattr(e, 'status') else "Unknown",
+                inline=False
+            )
+            
+        else:
+            embed = discord.Embed(
+                title="❌ Unexpected Error",
+                description=f"An unexpected error occurred while adding the server: {str(e)}",
+                color=COLOR_OFFLINE
+            )
+            embed.add_field(
+                name="💡 Suggestion",
+                value="Please try again. If the problem persists, check the bot's permissions and role hierarchy.",
+                inline=False
+            )
     
     await ctx.followup.send(embed=embed)
 
@@ -736,6 +950,31 @@ async def permissions(ctx: discord.ApplicationContext):
         inline=False
     )
     
+    # Check and fix category permissions
+    category = discord.utils.get(ctx.guild.categories, name="WhosOn Tracking")
+    category_fixed = False
+    if category:
+        category_perms_ok = await verify_category_permissions(category, ctx.guild)
+        if category_perms_ok:
+            embed.add_field(
+                name="Category Permissions",
+                value="✅ WhosOn Tracking category permissions verified",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Category Permissions",
+                value="❌ Could not fix WhosOn Tracking category permissions",
+                inline=False
+            )
+            category_fixed = True
+    else:
+        embed.add_field(
+            name="Category Permissions",
+            value="⚠️ WhosOn Tracking category not found",
+            inline=False
+        )
+    
     # Check and fix each voice channel
     issues = []
     fixed = 0
@@ -780,7 +1019,8 @@ async def permissions(ctx: discord.ApplicationContext):
             name="💡 Solutions",
             value="1. Ensure the bot's role is higher than any role restrictions on the voice channels\n"
                   "2. Grant the bot 'Manage Channels' permission server-wide\n"
-                  "3. Try removing and re-adding the affected servers",
+                  "3. Try removing and re-adding the affected servers\n"
+                  "4. Check that the 'WhosOn Tracking' category has proper bot permissions",
             inline=False
         )
         embed.color = COLOR_WARNING

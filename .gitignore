@@ -1,3 +1,4 @@
 .venv/
 .env
 whoson_data.json
+/__pycache__
