@@ -95,12 +95,12 @@ async def get_server_status(address, server_type="java"):
     try:
         if server_type == "java":
             server = JavaServer.lookup(address)
-            status = await asyncio.to_thread(server.status)
+            status = await asyncio.get_event_loop().run_in_executor(None, server.status)
             
             # Try to get query data if available
             query_data = None
             try:
-                query_data = await asyncio.to_thread(server.query)
+                query_data = await asyncio.get_event_loop().run_in_executor(None, server.query)
                 logger.debug(f"Query data retrieved for {address}")
             except:
                 logger.debug(f"Query not available for {address}")
@@ -123,7 +123,7 @@ async def get_server_status(address, server_type="java"):
         
         elif server_type == "bedrock":
             server = BedrockServer.lookup(address)
-            status = await asyncio.to_thread(server.status)
+            status = await asyncio.get_event_loop().run_in_executor(None, server.status)
             
             return {
                 "online": True,
