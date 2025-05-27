@@ -9,38 +9,30 @@ from datetime import datetime
 import aiofiles
 import traceback
 import logging
-from dotenv import load_dotenv
+import re
 
-# Load environment variables
-load_dotenv()
+# Import configuration
+from config import *
 
 # Set up logging
-log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
-    level=getattr(logging, log_level, logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format=LOG_FORMAT
 )
-logger = logging.getLogger('WhosOn')
+logger = logging.getLogger(LOGGER_NAME)
+
+# Validate configuration
+config_errors = validate_config()
+if config_errors:
+    for error in config_errors:
+        logger.error(f"Configuration error: {error}")
+    exit(1)
 
 # Bot configuration
-INTENTS = discord.Intents.default()
-INTENTS.message_content = True
-INTENTS.guilds = True
-INTENTS.members = True
-
-bot = commands.Bot(command_prefix='!', intents=INTENTS)
-
-# Data storage file
-DATA_FILE = 'whoson_data.json'
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=BOT_INTENTS)
 
 # In-memory storage for server data
 guild_data = {}
-
-# Colors for embeds
-COLOR_ONLINE = 0x00ff00
-COLOR_OFFLINE = 0xff0000
-COLOR_INFO = 0x00a8ff
-COLOR_WARNING = 0xffff00
 
 async def load_data():
     """Load stored data from file"""
@@ -57,7 +49,7 @@ async def load_data():
 async def save_data():
     """Save data to file"""
     async with aiofiles.open(DATA_FILE, 'w') as f:
-        await f.write(json.dumps(guild_data, indent=2))
+        await f.write(json.dumps(guild_data, indent=JSON_INDENT))
     logger.debug("Data saved to file")
 
 def get_server_type(address):
@@ -149,36 +141,36 @@ def create_status_embed(server_data, address, nickname=None):
     """Create an embed with server status information"""
     if server_data["online"]:
         embed = discord.Embed(
-            title=f"📊 {nickname or address}",
+            title=EMBED_TITLES['server_status'].format(name=nickname or address),
             color=COLOR_ONLINE,
             timestamp=datetime.utcnow()
         )
         
         # Basic info
         embed.add_field(
-            name="Status",
+            name=EMBED_FIELDS['status'],
             value="🟢 Online",
             inline=True
         )
         embed.add_field(
-            name="Players",
+            name=EMBED_FIELDS['players'],
             value=f"{server_data['players_online']}/{server_data['players_max']}",
             inline=True
         )
         embed.add_field(
-            name="Latency",
+            name=EMBED_FIELDS['latency'],
             value=f"{server_data['latency']}ms",
             inline=True
         )
         
         # Server type and version
         embed.add_field(
-            name="Type",
+            name=EMBED_FIELDS['type'],
             value=server_data['type'].capitalize(),
             inline=True
         )
         embed.add_field(
-            name="Version",
+            name=EMBED_FIELDS['version'],
             value=server_data.get('version', 'Unknown'),
             inline=True
         )
@@ -189,24 +181,23 @@ def create_status_embed(server_data, address, nickname=None):
             motd = server_data['motd']
             if isinstance(motd, str):
                 # Remove Minecraft color codes
-                import re
-                motd = re.sub(r'§[0-9a-fklmnor]', '', motd)
+                motd = re.sub(MINECRAFT_COLOR_REGEX, '', motd)
             embed.add_field(
-                name="MOTD",
-                value=f"`{motd[:1024]}`",  # Discord field limit
+                name=EMBED_FIELDS['motd'],
+                value=f"`{motd[:DISCORD_MOTD_LIMIT]}`",  # Discord field limit
                 inline=False
             )
         
         # Player list (Java only)
         if server_data['type'] == 'java' and server_data.get('player_list'):
-            players = server_data['player_list'][:20]  # Limit to 20 players
+            players = server_data['player_list'][:MAX_PLAYERS_DISPLAY]  # Limit to configured max
             if players:
                 player_str = ", ".join(players)
-                if len(server_data['player_list']) > 20:
-                    player_str += f" ... and {len(server_data['player_list']) - 20} more"
+                if len(server_data['player_list']) > MAX_PLAYERS_DISPLAY:
+                    player_str += f" ... and {len(server_data['player_list']) - MAX_PLAYERS_DISPLAY} more"
                 embed.add_field(
-                    name="Online Players",
-                    value=player_str[:1024],
+                    name=EMBED_FIELDS['online_players'],
+                    value=player_str[:DISCORD_FIELD_LIMIT],
                     inline=False
                 )
         
@@ -214,13 +205,13 @@ def create_status_embed(server_data, address, nickname=None):
         if server_data['type'] == 'bedrock':
             if server_data.get('gamemode'):
                 embed.add_field(
-                    name="Gamemode",
+                    name=EMBED_FIELDS['gamemode'],
                     value=server_data['gamemode'],
                     inline=True
                 )
             if server_data.get('map'):
                 embed.add_field(
-                    name="Map",
+                    name=EMBED_FIELDS['map'],
                     value=server_data['map'],
                     inline=True
                 )
@@ -230,24 +221,24 @@ def create_status_embed(server_data, address, nickname=None):
             query = server_data['query_data']
             if query.get('software'):
                 embed.add_field(
-                    name="Software",
+                    name=EMBED_FIELDS['software'],
                     value=query['software'],
                     inline=True
                 )
             if query.get('map'):
                 embed.add_field(
-                    name="Map",
+                    name=EMBED_FIELDS['map'],
                     value=query['map'],
                     inline=True
                 )
             if query.get('plugins'):
-                plugins = query['plugins'][:5]  # Limit to 5 plugins
+                plugins = query['plugins'][:MAX_PLUGINS_DISPLAY]  # Limit to configured max
                 plugin_str = ", ".join(plugins)
-                if len(query['plugins']) > 5:
-                    plugin_str += f" ... and {len(query['plugins']) - 5} more"
+                if len(query['plugins']) > MAX_PLUGINS_DISPLAY:
+                    plugin_str += f" ... and {len(query['plugins']) - MAX_PLUGINS_DISPLAY} more"
                 embed.add_field(
-                    name="Plugins",
-                    value=plugin_str[:1024],
+                    name=EMBED_FIELDS['plugins'],
+                    value=plugin_str[:DISCORD_FIELD_LIMIT],
                     inline=False
                 )
         
@@ -255,15 +246,15 @@ def create_status_embed(server_data, address, nickname=None):
         
     else:
         embed = discord.Embed(
-            title=f"📊 {nickname or address}",
+            title=EMBED_TITLES['server_status'].format(name=nickname or address),
             description="🔴 **Server Offline**",
             color=COLOR_OFFLINE,
             timestamp=datetime.utcnow()
         )
         if server_data.get('error'):
             embed.add_field(
-                name="Error",
-                value=str(server_data['error'])[:1024],
+                name=EMBED_FIELDS['error'],
+                value=str(server_data['error'])[:DISCORD_FIELD_LIMIT],
                 inline=False
             )
         embed.set_footer(text=f"Server: {address}")
@@ -275,14 +266,9 @@ def check_bot_permissions(guild):
     bot_member = guild.me
     permissions = bot_member.guild_permissions
     
-    required = {
-        "manage_channels": permissions.manage_channels,
-        "manage_roles": permissions.manage_roles,
-        "view_channel": permissions.view_channel,
-        "send_messages": permissions.send_messages,
-        "embed_links": permissions.embed_links,
-        "read_message_history": permissions.read_message_history,
-    }
+    required = {}
+    for perm in REQUIRED_GUILD_PERMISSIONS:
+        required[perm] = getattr(permissions, perm)
     
     missing = [perm for perm, has in required.items() if not has]
     
@@ -298,16 +284,9 @@ async def verify_category_permissions(category, guild):
     
     logger.debug(f"Checking category permissions for '{category.name}' in {guild.name}")
     
-    required_perms = {
-        "manage_channels": category_perms.manage_channels,
-        "view_channel": category_perms.view_channel,
-        "send_messages": category_perms.send_messages,
-        "embed_links": category_perms.embed_links,
-        "read_message_history": category_perms.read_message_history,
-        "manage_messages": category_perms.manage_messages,
-        "connect": category_perms.connect,
-        "manage_roles": category_perms.manage_roles
-    }
+    required_perms = {}
+    for perm in REQUIRED_CATEGORY_PERMISSIONS:
+        required_perms[perm] = getattr(category_perms, perm)
     
     missing_perms = [perm for perm, has in required_perms.items() if not has]
     
@@ -316,16 +295,15 @@ async def verify_category_permissions(category, guild):
         try:
             # Try to fix the permissions
             logger.info(f"Attempting to fix category permissions in {guild.name}")
+            
+            # Create permission overwrite dict from config
+            perm_overwrite = {}
+            for perm in REQUIRED_CATEGORY_PERMISSIONS:
+                perm_overwrite[perm] = True
+            
             await category.set_permissions(
                 bot_member,
-                manage_channels=True,
-                view_channel=True,
-                send_messages=True,
-                embed_links=True,
-                read_message_history=True,
-                manage_messages=True,
-                connect=True,
-                manage_roles=True,
+                **perm_overwrite,
                 overwrite=True
             )
             logger.info(f"Successfully fixed category permissions in {guild.name}")
@@ -342,16 +320,7 @@ async def verify_category_permissions(category, guild):
 
 def generate_invite_link(guild=None):
     """Generate an invite link with the required permissions"""
-    permissions = discord.Permissions(
-        manage_channels=True,
-        manage_roles=True,
-        view_channel=True,
-        send_messages=True,
-        embed_links=True,
-        read_message_history=True,
-        use_slash_commands=True
-    )
-    return discord.utils.oauth_url(bot.user.id, permissions=permissions, guild=guild)
+    return discord.utils.oauth_url(bot.user.id, permissions=INVITE_PERMISSIONS, guild=guild)
 
 @bot.event
 async def on_ready():
@@ -377,13 +346,13 @@ async def on_guild_remove(guild):
         logger.info(f"Cleaned up data for removed guild: {guild.name}")
 
 # Slash Commands
-@bot.slash_command(name="add", description="Add a Minecraft server to track")
+@bot.slash_command(name="add", description=COMMAND_DESCRIPTIONS['add'])
 @discord.default_permissions(manage_guild=True)
 async def add_server(
     ctx: discord.ApplicationContext,
-    address: discord.Option(str, "Server address (e.g., play.example.com or play.example.com:25565)", required=True),
-    nickname: discord.Option(str, "Friendly name for the server", required=False),
-    server_type: discord.Option(str, "Server type", choices=["auto", "java", "bedrock"], default="auto")
+    address: discord.Option(str, OPTION_DESCRIPTIONS['address'], required=True),
+    nickname: discord.Option(str, OPTION_DESCRIPTIONS['nickname'], required=False),
+    server_type: discord.Option(str, OPTION_DESCRIPTIONS['server_type'], choices=SERVER_TYPES, default="auto")
 ):
     """Add a new Minecraft server to track"""
     guild_id = str(ctx.guild.id)
@@ -399,12 +368,12 @@ async def add_server(
             invite_link = generate_invite_link(ctx.guild)
             
             embed = discord.Embed(
-                title="❌ Missing Permissions",
+                title=EMBED_TITLES['missing_permissions'],
                 description=f"The bot is missing required permissions:\n**{', '.join(missing)}**\n\nPlease grant these permissions or [re-invite the bot]({invite_link}) with the correct permissions.",
                 color=COLOR_OFFLINE
             )
             embed.add_field(
-                name="💡 Important",
+                name=EMBED_FIELDS['important'],
                 value="Make sure the bot's role is positioned high enough in the role hierarchy to manage channels effectively.",
                 inline=False
             )
@@ -431,7 +400,7 @@ async def add_server(
             actual_type = detected_type
         else:
             embed = discord.Embed(
-                title="❌ Server Not Found",
+                title=EMBED_TITLES['server_not_found'],
                 description=f"Could not connect to `{address}`. Please check the address and try again.",
                 color=COLOR_OFFLINE
             )
@@ -442,26 +411,26 @@ async def add_server(
     status = await get_server_status(address, actual_type)
     if not status["online"]:
         embed = discord.Embed(
-            title="⚠️ Server Offline",
+            title=EMBED_TITLES['server_offline'],
             description=f"The server at `{address}` appears to be offline. Adding it anyway...",
             color=COLOR_WARNING
         )
-        embed.add_field(name="Error", value=status.get('error', 'Unknown error'), inline=False)
+        embed.add_field(name=EMBED_FIELDS['error'], value=status.get('error', 'Unknown error'), inline=False)
     else:
         embed = discord.Embed(
-            title="✅ Server Added",
+            title=EMBED_TITLES['server_added'],
             description=f"Successfully connected to {actual_type.capitalize()} server!",
             color=COLOR_ONLINE
         )
     
     # Create a safe key for the server
-    server_key = address.replace(":", "_").replace(".", "_")
+    server_key = create_server_key(address)
     
     try:
         # Create channels
-        category = discord.utils.get(ctx.guild.categories, name="WhosOn Tracking")
+        category = discord.utils.get(ctx.guild.categories, name=CATEGORY_NAME)
         if not category:
-            logger.info("Creating WhosOn Tracking category")
+            logger.info(f"Creating {CATEGORY_NAME} category")
             
             # Check bot permissions before attempting to create category
             bot_member = ctx.guild.me
@@ -514,7 +483,7 @@ async def add_server(
             
             try:
                 category = await ctx.guild.create_category(
-                    "WhosOn Tracking",
+                    CATEGORY_NAME,
                     overwrites=category_overwrites
                 )
                 logger.info("Created WhosOn Tracking category with bot permissions")
@@ -560,7 +529,13 @@ async def add_server(
             )
         
         # Create voice channel for stats
-        voice_channel_name = f"📊 {nickname or address}"
+        voice_channel_name = get_voice_channel_name(
+            status["online"], 
+            nickname, 
+            address, 
+            status.get('players_online'), 
+            status.get('players_max')
+        )
         logger.info(f"Creating voice channel: {voice_channel_name}")
         
         # Create permission overwrites to ensure bot has manage_channels
@@ -576,7 +551,7 @@ async def add_server(
         voice_channel = await ctx.guild.create_voice_channel(
             voice_channel_name,
             category=category,
-            user_limit=0,  # No one can join
+            user_limit=VOICE_CHANNEL_USER_LIMIT,  # No one can join
             overwrites=overwrites
         )
         
@@ -600,7 +575,7 @@ async def add_server(
             logger.info("Bot permissions verified successfully")
         
         # Create text channel for detailed info
-        text_channel_name = f"{nickname or address}".lower().replace(" ", "-").replace(".", "-").replace(":", "")
+        text_channel_name = get_text_channel_name(nickname, address)
         logger.info(f"Creating text channel: {text_channel_name}")
         
         # Create permission overwrites for text channel - read-only for users
@@ -731,11 +706,11 @@ async def add_server(
     
     await ctx.followup.send(embed=embed)
 
-@bot.slash_command(name="remove", description="Stop tracking a Minecraft server")
+@bot.slash_command(name="remove", description=COMMAND_DESCRIPTIONS['remove'])
 @discord.default_permissions(manage_guild=True)
 async def remove_server(
     ctx: discord.ApplicationContext,
-    server: discord.Option(str, "Server to remove", autocomplete=True)
+    server: discord.Option(str, OPTION_DESCRIPTIONS['server_to_remove'], autocomplete=True)
 ):
     """Remove a tracked server"""
     guild_id = str(ctx.guild.id)
@@ -793,7 +768,7 @@ async def remove_server(
     
     # Check if this was the last server and clean up category if needed
     category_deleted = False
-    if category and category.name == "WhosOn Tracking":
+    if category and category.name == CATEGORY_NAME:
         # Check if there are any remaining servers
         remaining_servers = len(guild_data[guild_id]["servers"])
         
@@ -855,7 +830,7 @@ async def remove_server(
     
     await ctx.followup.send(embed=embed)
 
-@bot.slash_command(name="list", description="List all tracked Minecraft servers")
+@bot.slash_command(name="list", description=COMMAND_DESCRIPTIONS['list'])
 async def list_servers(ctx: discord.ApplicationContext):
     """List all tracked servers"""
     guild_id = str(ctx.guild.id)
@@ -884,7 +859,7 @@ async def list_servers(ctx: discord.ApplicationContext):
     
     await ctx.respond(embed=embed)
 
-@bot.slash_command(name="update", description="Force update all server statuses")
+@bot.slash_command(name="update", description=COMMAND_DESCRIPTIONS['update'])
 @discord.default_permissions(manage_guild=True)
 async def force_update(ctx: discord.ApplicationContext):
     """Force an immediate update of all servers"""
@@ -921,7 +896,7 @@ async def force_update(ctx: discord.ApplicationContext):
         )
     await ctx.followup.send(embed=embed)
 
-@bot.slash_command(name="permissions", description="Check and fix bot permissions")
+@bot.slash_command(name="permissions", description=COMMAND_DESCRIPTIONS['permissions'])
 @discord.default_permissions(manage_guild=True)
 async def permissions(ctx: discord.ApplicationContext):
     """Check bot permissions and attempt to fix issues"""
@@ -951,7 +926,7 @@ async def permissions(ctx: discord.ApplicationContext):
     )
     
     # Check and fix category permissions
-    category = discord.utils.get(ctx.guild.categories, name="WhosOn Tracking")
+    category = discord.utils.get(ctx.guild.categories, name=CATEGORY_NAME)
     category_fixed = False
     if category:
         category_perms_ok = await verify_category_permissions(category, ctx.guild)
@@ -1033,10 +1008,10 @@ async def permissions(ctx: discord.ApplicationContext):
     
     await ctx.followup.send(embed=embed)
 
-@bot.slash_command(name="cleanup", description="Remove all tracked servers and clean up all WhosOn channels")
+@bot.slash_command(name="cleanup", description=COMMAND_DESCRIPTIONS['cleanup'])
 @discord.default_permissions(administrator=True)
 async def cleanup(ctx: discord.ApplicationContext):
-    """Remove all tracked servers and clean up channels"""
+    """Remove all tracked servers and clean up all WhosOn channels"""
     guild_id = str(ctx.guild.id)
     
     if guild_id not in guild_data or not guild_data[guild_id]["servers"]:
@@ -1127,7 +1102,7 @@ async def cleanup(ctx: discord.ApplicationContext):
         
         # Clean up WhosOn Tracking category
         try:
-            category = discord.utils.get(ctx.guild.categories, name="WhosOn Tracking")
+            category = discord.utils.get(ctx.guild.categories, name=CATEGORY_NAME)
             if category:
                 # Check if category is empty
                 if len(category.channels) == 0:
@@ -1189,15 +1164,15 @@ async def server_autocomplete(ctx: discord.AutocompleteContext):
 remove_server.options[0].autocomplete = server_autocomplete
 
 # Background task to update server statuses
-@tasks.loop(seconds=120)
+@tasks.loop(seconds=UPDATE_INTERVAL)
 async def update_all_servers():
-    """Update all tracked servers every 2 minutes"""
+    """Update all tracked servers every configured interval"""
     for guild_id in guild_data:
         for server_key in guild_data[guild_id]["servers"]:
             try:
                 await update_server_status(int(guild_id), server_key)
                 # Small delay between updates to spread out API calls
-                await asyncio.sleep(2)
+                await asyncio.sleep(UPDATE_DELAY_BETWEEN_SERVERS)
             except Exception as e:
                 logger.error(f"Error updating {server_key} in guild {guild_id}: {e}")
 
@@ -1212,14 +1187,13 @@ async def update_server_status(guild_id, server_key):
     # Update voice channel
     voice_channel = bot.get_channel(server_info["voice_channel_id"])
     if voice_channel:
-        if status["online"]:
-            name = f"🟢 {server_info.get('nickname') or server_info['address']}: {status['players_online']}/{status['players_max']}"
-        else:
-            name = f"🔴 {server_info.get('nickname') or server_info['address']}: Offline"
-        
-        # Truncate if too long
-        if len(name) > 100:
-            name = name[:97] + "..."
+        name = get_voice_channel_name(
+            status["online"],
+            server_info.get('nickname'),
+            server_info['address'],
+            status.get('players_online'),
+            status.get('players_max')
+        )
         
         # Only update if the name has actually changed
         if voice_channel.name != name:
@@ -1241,13 +1215,21 @@ async def update_server_status(guild_id, server_key):
                     # Try alternative approaches
                     try:
                         # Attempt 1: Try without emoji
+                        fallback_name = get_voice_channel_name(
+                            status["online"],
+                            server_info.get('nickname'),
+                            server_info['address'],
+                            status.get('players_online'),
+                            status.get('players_max')
+                        ).replace(STATUS_EMOJI_ONLINE, "").replace(STATUS_EMOJI_OFFLINE, "").strip()
+                        
                         if status["online"]:
                             fallback_name = f"{server_info.get('nickname') or server_info['address']}: {status['players_online']}/{status['players_max']} (Online)"
                         else:
                             fallback_name = f"{server_info.get('nickname') or server_info['address']}: Offline"
                         
-                        if len(fallback_name) > 100:
-                            fallback_name = fallback_name[:97] + "..."
+                        if len(fallback_name) > MAX_CHANNEL_NAME_LENGTH:
+                            fallback_name = fallback_name[:MAX_CHANNEL_NAME_LENGTH-3] + "..."
                         
                         if voice_channel.name != fallback_name:
                             await voice_channel.edit(name=fallback_name)
@@ -1292,12 +1274,11 @@ async def update_server_status(guild_id, server_key):
 
 # Run the bot
 if __name__ == "__main__":
-    token = os.getenv("DISCORD_BOT_TOKEN")
-    if not token:
+    if not DISCORD_BOT_TOKEN:
         logger.error("No bot token found! Please set DISCORD_BOT_TOKEN in your .env file")
         exit(1)
     
     try:
-        bot.run(token)
+        bot.run(DISCORD_BOT_TOKEN)
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")

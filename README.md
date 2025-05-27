@@ -5,10 +5,43 @@ WhosOn is a Discord bot that tracks Minecraft servers (both Java and Bedrock edi
 ## Files Included
 
 - `main.py` - The main bot file
+- `config.py` - Configuration file containing all global settings and constants
 - `requirements.txt` - Python dependencies
 - `.env.example` - Example environment configuration
 - `.gitignore` - Git ignore file
+- `test_config.py` - Configuration test script
 - `README.md` - This file
+
+## Configuration
+
+The bot uses a centralised configuration system in `config.py` that contains all global settings, constants, and customisable values. This includes:
+
+- **Bot Settings**: Command prefix, intents, permissions
+- **Embed Colours**: Customisable colour scheme for different message types
+- **Update Intervals**: How often server statuses are refreshed
+- **Display Limits**: Maximum players/plugins shown in embeds
+- **Channel Configuration**: Category names, channel naming formats
+- **Error Handling**: Rate limits, retry delays, error display limits
+
+### Testing Configuration
+
+You can test that your configuration is working correctly by running:
+
+```bash
+python test_config.py
+```
+
+This will validate all settings and test the helper functions.
+
+### Customising Configuration
+
+To customise the bot's behaviour, edit the values in `config.py`. Key settings you might want to change:
+
+- `UPDATE_INTERVAL`: How often to update server statuses (default: 120 seconds)
+- `MAX_PLAYERS_DISPLAY`: Maximum number of players to show in embeds (default: 20)
+- `CATEGORY_NAME`: Name of the Discord category for bot channels (default: "WhosOn Tracking")
+- `COLOR_*`: Embed colours for different message types
+- `VOICE_CHANNEL_FORMAT`: Format string for voice channel names
 
 ## Features
 
