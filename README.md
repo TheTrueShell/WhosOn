@@ -6,8 +6,6 @@ WhosOn is a Discord bot that tracks Minecraft servers (both Java and Bedrock edi
 
 - `main.py` - The main bot file
 - `requirements.txt` - Python dependencies
-- `generate_invite.py` - Helper to generate bot invite link
-- `setup_check.py` - Verify your installation
 - `.env.example` - Example environment configuration
 - `.gitignore` - Git ignore file
 - `README.md` - This file
