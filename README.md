@@ -89,25 +89,26 @@ For debug logging, set the LOG_LEVEL in your .env file:
 LOG_LEVEL=DEBUG
 ```
 
-2. In your Discord server, use the `/setup` command (requires Administrator permission)
+2. In your Discord server, use the `/add` command to add your first server (requires Manage Server permission)
 
 ### Commands
 
 All commands are slash commands:
 
-- `/setup` - Initial bot setup (Admin only)
-- `/add_server` - Add a Minecraft server to track
+- `/add` - Add a Minecraft server to track (Manage Server permission required)
   - `address`: Server address (e.g., play.example.com:25565)
   - `nickname`: Optional friendly name for the server
   - `server_type`: auto/java/bedrock (default: auto)
-- `/remove_server` - Stop tracking a server
+- `/remove` - Stop tracking a server (Manage Server permission required)
   - `server`: Select from autocomplete list
-- `/list_servers` - View all tracked servers
-- `/force_update` - Manually update all server statuses
+- `/list` - View all tracked servers
+- `/update` - Manually update all server statuses (Manage Server permission required)
+- `/permissions` - Check and fix bot permissions (Manage Server permission required)
+- `/cleanup` - Remove all tracked servers and clean up all WhosOn channels (Administrator permission required)
 
 ### Adding a Server
 
-1. Use `/add_server` command
+1. Use `/add` command
 2. Enter the server address (with or without port)
 3. Optionally provide a nickname
 4. Choose server type or leave as "auto" for automatic detection
@@ -115,7 +116,7 @@ All commands are slash commands:
    - A voice channel showing server status and player count
    - A text channel with detailed server information
 
-### Channel Organization
+### Channel Organisation
 
 The bot creates a "WhosOn Tracking" category with:
 - Voice channels named: 🟢/🔴 [Server Name]: X/Y players
@@ -135,7 +136,7 @@ If you get a "403 Forbidden: Missing Permissions" error:
 - Ensure the bot has the "Manage Roles" permission
 - Check that the bot's role is higher than @everyone in the role hierarchy
 - Re-invite the bot using `python generate_invite.py` to ensure all permissions are granted
-- Use the `/setup` command to check for missing permissions
+- Use the `/permissions` command to check for missing permissions
 - Enable debug logging to see detailed permission checks:
   ```
   LOG_LEVEL=DEBUG
