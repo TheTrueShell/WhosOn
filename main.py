@@ -5,7 +5,7 @@ from mcstatus import JavaServer, BedrockServer
 import asyncio
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import aiofiles
 import traceback
 import logging
@@ -143,7 +143,7 @@ def create_status_embed(server_data, address, nickname=None):
         embed = discord.Embed(
             title=EMBED_TITLES['server_status'].format(name=nickname or address),
             color=COLOR_ONLINE,
-            timestamp=datetime.now(datetime.UTC)
+            timestamp=datetime.now(timezone.utc)
         )
         
         # Basic info
@@ -249,7 +249,7 @@ def create_status_embed(server_data, address, nickname=None):
             title=EMBED_TITLES['server_status'].format(name=nickname or address),
             description="🔴 **Server Offline**",
             color=COLOR_OFFLINE,
-            timestamp=datetime.now(datetime.UTC)
+            timestamp=datetime.now(timezone.utc)
         )
         if server_data.get('error'):
             embed.add_field(
