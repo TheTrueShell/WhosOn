@@ -1285,6 +1285,71 @@ async def update_server_status(guild_id, server_key):
         except Exception as e:
             logger.error(f"Error updating message: {e}")
 
+@bot.slash_command(name="taskstatus", description="Check the status of the update task")
+@discord.default_permissions(administrator=True)
+async def task_status(ctx: discord.ApplicationContext):
+    """Check if the background update task is running"""
+    embed = discord.Embed(
+        title="📊 Task Status",
+        color=COLOR_INFO
+    )
+    
+    if update_all_servers.is_running():
+        embed.add_field(
+            name="Update Task",
+            value="✅ Running",
+            inline=True
+        )
+        embed.add_field(
+            name="Current Iteration",
+            value=f"{update_all_servers.current_loop}",
+            inline=True
+        )
+        embed.add_field(
+            name="Next Run",
+            value=f"<t:{int(update_all_servers.next_iteration.timestamp())}:R>" if update_all_servers.next_iteration else "Unknown",
+            inline=True
+        )
+    else:
+        embed.add_field(
+            name="Update Task",
+            value="❌ Stopped",
+            inline=True
+        )
+        embed.color = COLOR_OFFLINE
+        
+        # Try to restart the task
+        embed.add_field(
+            name="Action",
+            value="Attempting to restart task...",
+            inline=False
+        )
+        
+        try:
+            update_all_servers.start()
+            embed.add_field(
+                name="Result",
+                value="✅ Task restarted successfully!",
+                inline=False
+            )
+            embed.color = COLOR_ONLINE
+        except Exception as e:
+            embed.add_field(
+                name="Result",
+                value=f"❌ Failed to restart: {str(e)}",
+                inline=False
+            )
+    
+    # Add server statistics
+    total_servers = sum(len(guild_data[g]["servers"]) for g in guild_data)
+    embed.add_field(
+        name="Statistics",
+        value=f"Guilds: {len(guild_data)}\nTotal Servers: {total_servers}\nUpdate Interval: {UPDATE_INTERVAL}s",
+        inline=False
+    )
+    
+    await ctx.respond(embed=embed)
+
 # Run the bot
 if __name__ == "__main__":
     if not DISCORD_BOT_TOKEN:
