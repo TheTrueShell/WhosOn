@@ -1148,6 +1148,61 @@ async def cleanup(ctx: discord.ApplicationContext):
     view = ConfirmView()
     await ctx.respond(embed=embed, view=view)
 
+@bot.slash_command(name="stats", description="View bot statistics")
+async def stats(ctx: discord.ApplicationContext):
+    """Display bot statistics"""
+    stats = await db.get_server_stats()
+    
+    embed = discord.Embed(
+        title="📊 Bot Statistics",
+        color=COLOR_INFO,
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    embed.add_field(
+        name="Total Servers",
+        value=f"{stats['total_servers']}",
+        inline=True
+    )
+    embed.add_field(
+        name="Total Guilds",
+        value=f"{stats['guilds']}",
+        inline=True
+    )
+    embed.add_field(
+        name="Connected Guilds",
+        value=f"{len(bot.guilds)}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="Server Types",
+        value=f"Java: {stats['java_servers']}\nBedrock: {stats['bedrock_servers']}",
+        inline=False
+    )
+    
+    # Task status
+    if update_all_servers.is_running():
+        embed.add_field(
+            name="Update Task",
+            value="✅ Running",
+            inline=True
+        )
+        if update_all_servers.next_iteration:
+            embed.add_field(
+                name="Next Update",
+                value=f"<t:{int(update_all_servers.next_iteration.timestamp())}:R>",
+                inline=True
+            )
+    else:
+        embed.add_field(
+            name="Update Task",
+            value="❌ Stopped",
+            inline=True
+        )
+    
+    await ctx.respond(embed=embed)
+
 # Autocomplete for server selection
 async def server_autocomplete(ctx: discord.AutocompleteContext):
     """Provide autocomplete options for server selection"""
