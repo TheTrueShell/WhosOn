@@ -143,7 +143,7 @@ def create_status_embed(server_data, address, nickname=None):
         embed = discord.Embed(
             title=EMBED_TITLES['server_status'].format(name=nickname or address),
             color=COLOR_ONLINE,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(datetime.UTC)
         )
         
         # Basic info
@@ -249,7 +249,7 @@ def create_status_embed(server_data, address, nickname=None):
             title=EMBED_TITLES['server_status'].format(name=nickname or address),
             description="🔴 **Server Offline**",
             color=COLOR_OFFLINE,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(datetime.UTC)
         )
         if server_data.get('error'):
             embed.add_field(
