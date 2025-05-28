@@ -111,15 +111,23 @@ async def get_server_status(address, server_type="java"):
             server = BedrockServer.lookup(address)
             status = await asyncio.get_event_loop().run_in_executor(None, server.status)
             
+            # Extract clean MOTD text
+            motd_text = None
+            if status.motd:
+                if hasattr(status.motd, 'raw'):
+                    motd_text = status.motd.raw
+                else:
+                    motd_text = str(status.motd)
+            
             return {
                 "online": True,
                 "type": "bedrock",
                 "players_online": status.players.online,
                 "players_max": status.players.max,
                 "latency": round(status.latency, 2),
-                "version": status.version.version if hasattr(status.version, 'version') else "Bedrock",
-                "motd": status.motd,
-                "map": status.map if hasattr(status, 'map') else None,
+                "version": status.version.name if hasattr(status.version, 'name') else "Bedrock",
+                "motd": motd_text,
+                "map": status.map_name if hasattr(status, 'map_name') else None,
                 "gamemode": status.gamemode if hasattr(status, 'gamemode') else None
             }
     
@@ -173,9 +181,11 @@ def create_status_embed(server_data, address, nickname=None):
         if server_data.get('motd'):
             # Clean MOTD of formatting codes
             motd = server_data['motd']
-            if isinstance(motd, str):
-                # Remove Minecraft color codes
-                motd = re.sub(MINECRAFT_COLOR_REGEX, '', motd)
+            # Convert to string if it's not already a string (handles Motd objects)
+            if not isinstance(motd, str):
+                motd = str(motd)
+            # Remove Minecraft color codes
+            motd = re.sub(MINECRAFT_COLOR_REGEX, '', motd)
             embed.add_field(
                 name=EMBED_FIELDS['motd'],
                 value=f"`{motd[:DISCORD_MOTD_LIMIT]}`",  # Discord field limit
