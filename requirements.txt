@@ -1,4 +1,5 @@
 py-cord
 mcstatus
 python-dotenv
-aiofiles
+aiosqlite
+colorlog
