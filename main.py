@@ -1167,22 +1167,74 @@ remove_server.options[0].autocomplete = server_autocomplete
 @tasks.loop(seconds=UPDATE_INTERVAL)
 async def update_all_servers():
     """Update all tracked servers every configured interval"""
-    for guild_id in guild_data:
-        for server_key in guild_data[guild_id]["servers"]:
-            try:
-                await update_server_status(int(guild_id), server_key)
-                # Small delay between updates to spread out API calls
-                await asyncio.sleep(UPDATE_DELAY_BETWEEN_SERVERS)
-            except Exception as e:
-                logger.error(f"Error updating {server_key} in guild {guild_id}: {e}")
+    try:
+        # Create a copy of the guild IDs to avoid modification during iteration
+        guild_ids = list(guild_data.keys())
+        
+        for guild_id in guild_ids:
+            # Check if guild still exists in data (might have been removed)
+            if guild_id not in guild_data:
+                continue
+                
+            # Create a copy of server keys for this guild
+            server_keys = list(guild_data[guild_id]["servers"].keys())
+            
+            for server_key in server_keys:
+                # Check if server still exists (might have been removed)
+                if guild_id not in guild_data or server_key not in guild_data[guild_id]["servers"]:
+                    continue
+                    
+                try:
+                    await update_server_status(int(guild_id), server_key)
+                    # Small delay between updates to spread out API calls
+                    await asyncio.sleep(UPDATE_DELAY_BETWEEN_SERVERS)
+                except Exception as e:
+                    logger.error(f"Error updating {server_key} in guild {guild_id}: {e}")
+                    # Continue with next server even if one fails
+                    continue
+                    
+    except Exception as e:
+        logger.error(f"Unexpected error in update_all_servers: {e}")
+        logger.error(traceback.format_exc())
+        # Re-raise to trigger the error handler
+        raise
+
+@update_all_servers.error
+async def update_all_servers_error(error):
+    """Handle errors in the update loop"""
+    logger.error(f"Error in update_all_servers task: {error}")
+    logger.error(traceback.format_exc())
+    
+    # Wait a bit before restarting to avoid rapid restart loops
+    await asyncio.sleep(60)
+    
+    # Restart the task
+    logger.info("Restarting update_all_servers task...")
+    update_all_servers.restart()
+
+@update_all_servers.before_loop
+async def before_update_all_servers():
+    """Wait for the bot to be ready before starting the task"""
+    await bot.wait_until_ready()
+    logger.info("Starting update_all_servers task...")
 
 async def update_server_status(guild_id, server_key):
     """Update a specific server's status"""
     guild_id_str = str(guild_id)
+    
+    # Check if data still exists
+    if guild_id_str not in guild_data or server_key not in guild_data[guild_id_str]["servers"]:
+        logger.warning(f"Server {server_key} no longer exists in guild {guild_id}")
+        return
+        
     server_info = guild_data[guild_id_str]["servers"][server_key]
     
     # Get current status
-    status = await get_server_status(server_info["address"], server_info["type"])
+    try:
+        status = await get_server_status(server_info["address"], server_info["type"])
+    except Exception as e:
+        logger.error(f"Failed to get status for {server_info['address']}: {e}")
+        return
     
     # Update voice channel
     voice_channel = bot.get_channel(server_info["voice_channel_id"])
@@ -1205,49 +1257,10 @@ async def update_server_status(guild_id, server_key):
                     return
                 
                 await voice_channel.edit(name=name)
-                logger.info(f"Updated voice channel name from '{voice_channel.name}' to '{name}'")
+                logger.info(f"Updated voice channel name to '{name}'")
             except discord.HTTPException as e:
                 if e.status == 429:  # Rate limited
                     logger.warning(f"Rate limited updating voice channel for {server_key} - will retry next cycle")
-                elif e.status == 403:  # Forbidden
-                    logger.error(f"Permission denied updating voice channel {voice_channel.name}: {e}. Bot role may be lower than channel permissions.")
-                    
-                    # Try alternative approaches
-                    try:
-                        # Attempt 1: Try without emoji
-                        fallback_name = get_voice_channel_name(
-                            status["online"],
-                            server_info.get('nickname'),
-                            server_info['address'],
-                            status.get('players_online'),
-                            status.get('players_max')
-                        ).replace(STATUS_EMOJI_ONLINE, "").replace(STATUS_EMOJI_OFFLINE, "").strip()
-                        
-                        if status["online"]:
-                            fallback_name = f"{server_info.get('nickname') or server_info['address']}: {status['players_online']}/{status['players_max']} (Online)"
-                        else:
-                            fallback_name = f"{server_info.get('nickname') or server_info['address']}: Offline"
-                        
-                        if len(fallback_name) > MAX_CHANNEL_NAME_LENGTH:
-                            fallback_name = fallback_name[:MAX_CHANNEL_NAME_LENGTH-3] + "..."
-                        
-                        if voice_channel.name != fallback_name:
-                            await voice_channel.edit(name=fallback_name)
-                            logger.info(f"Successfully updated voice channel using fallback name: {fallback_name}")
-                        return
-                    except discord.HTTPException:
-                        pass
-                    
-                    # Attempt 2: Try to recreate the channel permissions
-                    try:
-                        await voice_channel.set_permissions(voice_channel.guild.me, manage_channels=True, overwrite=True)
-                        await voice_channel.edit(name=name)
-                        logger.info(f"Successfully updated voice channel after fixing permissions: {name}")
-                        return
-                    except discord.HTTPException:
-                        pass
-                    
-                    logger.error(f"All fallback attempts failed for voice channel {voice_channel.name}")
                 else:
                     logger.error(f"Error updating voice channel: {e}")
             except Exception as e:
