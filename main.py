@@ -3,16 +3,15 @@ from discord.ext import commands, tasks
 import mcstatus
 from mcstatus import JavaServer, BedrockServer
 import asyncio
-import json
 import os
 from datetime import datetime, timezone
-import aiofiles
 import traceback
 import logging
 import re
 
-# Import configuration
+# Import configuration and database
 from config import *
+from database import db
 
 # Set up logging
 logging.basicConfig(
@@ -31,26 +30,21 @@ if config_errors:
 # Bot configuration
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=BOT_INTENTS)
 
-# In-memory storage for server data
-guild_data = {}
-
-async def load_data():
-    """Load stored data from file"""
-    global guild_data
-    if os.path.exists(DATA_FILE):
-        async with aiofiles.open(DATA_FILE, 'r') as f:
-            content = await f.read()
-            guild_data = json.loads(content) if content else {}
-            logger.info(f"Loaded data for {len(guild_data)} guilds")
-    else:
-        guild_data = {}
-        logger.info("No existing data file found, starting fresh")
-
-async def save_data():
-    """Save data to file"""
-    async with aiofiles.open(DATA_FILE, 'w') as f:
-        await f.write(json.dumps(guild_data, indent=JSON_INDENT))
-    logger.debug("Data saved to file")
+async def init_database():
+    """Initialize the database on startup"""
+    try:
+        await db.init_database()
+        logger.info("Database initialized successfully")
+        
+        # Clean up orphaned servers from guilds bot is no longer in
+        valid_guild_ids = [str(guild.id) for guild in bot.guilds]
+        deleted = await db.cleanup_orphaned_servers(valid_guild_ids)
+        if deleted > 0:
+            logger.info(f"Cleaned up {deleted} orphaned servers on startup")
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        exit(1)
 
 def get_server_type(address):
     """Attempt to determine server type (Java or Bedrock)"""
@@ -327,23 +321,25 @@ async def on_ready():
     logger.info(f'{bot.user} has connected to Discord!')
     logger.info(f'Connected to {len(bot.guilds)} guilds')
     
+    # Initialize database
+    await init_database()
+    
     # Check permissions in each guild
     for guild in bot.guilds:
         missing = check_bot_permissions(guild)
         if missing:
             logger.warning(f"Missing permissions in {guild.name}: {missing}")
     
-    await load_data()
+    # Start background task
     update_all_servers.start()
 
 @bot.event
 async def on_guild_remove(guild):
     """Clean up data when bot is removed from a guild"""
     guild_id = str(guild.id)
-    if guild_id in guild_data:
-        del guild_data[guild_id]
-        await save_data()
-        logger.info(f"Cleaned up data for removed guild: {guild.name}")
+    deleted = await db.remove_guild_servers(guild_id)
+    if deleted > 0:
+        logger.info(f"Cleaned up {deleted} servers for removed guild: {guild.name}")
 
 # Slash Commands
 @bot.slash_command(name="add", description=COMMAND_DESCRIPTIONS['add'])
@@ -359,35 +355,24 @@ async def add_server(
     
     logger.info(f"Adding server {address} to guild {ctx.guild.name}")
     
-    # Initialize guild data if not set up
-    if guild_id not in guild_data:
-        # Check bot permissions first
-        missing = check_bot_permissions(ctx.guild)
-        if missing:
-            # Generate invite link with required permissions
-            invite_link = generate_invite_link(ctx.guild)
-            
-            embed = discord.Embed(
-                title=EMBED_TITLES['missing_permissions'],
-                description=f"The bot is missing required permissions:\n**{', '.join(missing)}**\n\nPlease grant these permissions or [re-invite the bot]({invite_link}) with the correct permissions.",
-                color=COLOR_OFFLINE
-            )
-            embed.add_field(
-                name=EMBED_FIELDS['important'],
-                value="Make sure the bot's role is positioned high enough in the role hierarchy to manage channels effectively.",
-                inline=False
-            )
-            await ctx.respond(embed=embed, ephemeral=True)
-            return
+    # Check bot permissions first
+    missing = check_bot_permissions(ctx.guild)
+    if missing:
+        # Generate invite link with required permissions
+        invite_link = generate_invite_link(ctx.guild)
         
-        # Initialize guild data
-        guild_data[guild_id] = {
-            "servers": {},
-            "voice_channels": {},
-            "text_channels": {}
-        }
-        await save_data()
-        logger.info(f"Initialized guild data for: {ctx.guild.name}")
+        embed = discord.Embed(
+            title=EMBED_TITLES['missing_permissions'],
+            description=f"The bot is missing required permissions:\n**{', '.join(missing)}**\n\nPlease grant these permissions or [re-invite the bot]({invite_link}) with the correct permissions.",
+            color=COLOR_OFFLINE
+        )
+        embed.add_field(
+            name=EMBED_FIELDS['important'],
+            value="Make sure the bot's role is positioned high enough in the role hierarchy to manage channels effectively.",
+            inline=False
+        )
+        await ctx.respond(embed=embed, ephemeral=True)
+        return
     
     # Defer response as this might take a moment
     await ctx.defer()
@@ -609,8 +594,8 @@ async def add_server(
         status_embed = create_status_embed(status, address, nickname)
         message = await text_channel.send(embed=status_embed)
         
-        # Store server data
-        guild_data[guild_id]["servers"][server_key] = {
+        # Store server data in database
+        server_data = {
             "address": address,
             "nickname": nickname,
             "type": actual_type,
@@ -619,7 +604,19 @@ async def add_server(
             "message_id": message.id
         }
         
-        await save_data()
+        success = await db.add_server(guild_id, server_key, server_data)
+        if not success:
+            # Server already exists
+            embed = discord.Embed(
+                title="❌ Server Already Tracked",
+                description=f"The server `{address}` is already being tracked.",
+                color=COLOR_OFFLINE
+            )
+            # Clean up created channels
+            await voice_channel.delete()
+            await text_channel.delete()
+            await ctx.followup.send(embed=embed)
+            return
         
         embed.add_field(
             name="Channels Created",
@@ -717,7 +714,9 @@ async def remove_server(
     
     logger.info(f"Removing server {server} from guild {ctx.guild.name}")
     
-    if guild_id not in guild_data or server not in guild_data[guild_id]["servers"]:
+    # Get server data from database
+    server_data = await db.get_server(guild_id, server)
+    if not server_data:
         embed = discord.Embed(
             title="❌ Server Not Found",
             description="That server is not being tracked.",
@@ -727,8 +726,6 @@ async def remove_server(
         return
     
     await ctx.defer()
-    
-    server_data = guild_data[guild_id]["servers"][server]
     
     # Get channels before deletion
     voice_channel = bot.get_channel(server_data["voice_channel_id"])
@@ -763,16 +760,16 @@ async def remove_server(
         logger.error(f"Error deleting text channel: {e}")
         errors.append(f"text channel: {str(e)}")
     
-    # Remove from data
-    del guild_data[guild_id]["servers"][server]
+    # Remove from database
+    await db.remove_server(guild_id, server)
     
     # Check if this was the last server and clean up category if needed
     category_deleted = False
     if category and category.name == CATEGORY_NAME:
         # Check if there are any remaining servers
-        remaining_servers = len(guild_data[guild_id]["servers"])
+        remaining_servers = await db.get_guild_servers(guild_id)
         
-        if remaining_servers == 0:
+        if len(remaining_servers) == 0:
             # Check if category is empty (no other channels)
             category_channels = category.channels
             if len(category_channels) == 0:
@@ -785,8 +782,6 @@ async def remove_server(
                     errors.append(f"category: {str(e)}")
             else:
                 logger.info(f"Category not deleted - contains {len(category_channels)} other channels")
-    
-    await save_data()
     
     logger.info(f"Removed server {server} from guild {ctx.guild.name}")
     
@@ -820,8 +815,8 @@ async def remove_server(
         embed.color = COLOR_WARNING
     
     # Add helpful info if this was the last server
-    remaining_servers = len(guild_data[guild_id]["servers"])
-    if remaining_servers == 0:
+    remaining_servers = await db.get_guild_servers(guild_id)
+    if len(remaining_servers) == 0:
         embed.add_field(
             name="ℹ️ No More Servers",
             value="You're no longer tracking any servers. Use `/add` to add a new one.",
@@ -835,7 +830,8 @@ async def list_servers(ctx: discord.ApplicationContext):
     """List all tracked servers"""
     guild_id = str(ctx.guild.id)
     
-    if guild_id not in guild_data or not guild_data[guild_id]["servers"]:
+    servers = await db.get_guild_servers(guild_id)
+    if not servers:
         embed = discord.Embed(
             title="📋 Tracked Servers",
             description="No servers are currently being tracked.",
@@ -849,7 +845,7 @@ async def list_servers(ctx: discord.ApplicationContext):
         color=COLOR_INFO
     )
     
-    for key, server in guild_data[guild_id]["servers"].items():
+    for key, server in servers.items():
         value = f"**Address:** `{server['address']}`\n**Type:** {server['type'].capitalize()}"
         embed.add_field(
             name=server.get('nickname') or server['address'],
@@ -865,7 +861,8 @@ async def force_update(ctx: discord.ApplicationContext):
     """Force an immediate update of all servers"""
     guild_id = str(ctx.guild.id)
     
-    if guild_id not in guild_data:
+    servers = await db.get_guild_servers(guild_id)
+    if not servers:
         await ctx.respond("No servers configured.", ephemeral=True)
         return
     
@@ -875,7 +872,7 @@ async def force_update(ctx: discord.ApplicationContext):
     
     updated = 0
     errors = 0
-    for server_key, server_info in guild_data[guild_id]["servers"].items():
+    for server_key, server_info in servers.items():
         try:
             await update_server_status(ctx.guild.id, server_key)
             updated += 1
@@ -902,7 +899,8 @@ async def permissions(ctx: discord.ApplicationContext):
     """Check bot permissions and attempt to fix issues"""
     guild_id = str(ctx.guild.id)
     
-    if guild_id not in guild_data or not guild_data[guild_id]["servers"]:
+    servers = await db.get_guild_servers(guild_id)
+    if not servers:
         await ctx.respond("No servers are being tracked.", ephemeral=True)
         return
     
@@ -955,7 +953,7 @@ async def permissions(ctx: discord.ApplicationContext):
     fixed = 0
     errors = 0
     
-    for server_key, server_info in guild_data[guild_id]["servers"].items():
+    for server_key, server_info in servers.items():
         voice_channel = bot.get_channel(server_info["voice_channel_id"])
         if voice_channel:
             channel_perms = voice_channel.permissions_for(bot_member)
@@ -1014,14 +1012,15 @@ async def cleanup(ctx: discord.ApplicationContext):
     """Remove all tracked servers and clean up all WhosOn channels"""
     guild_id = str(ctx.guild.id)
     
-    if guild_id not in guild_data or not guild_data[guild_id]["servers"]:
+    servers = await db.get_guild_servers(guild_id)
+    if not servers:
         await ctx.respond("No servers are currently being tracked.", ephemeral=True)
         return
     
     # Confirmation check
     embed = discord.Embed(
         title="⚠️ Confirm Cleanup",
-        description=f"This will remove **{len(guild_data[guild_id]['servers'])} server(s)** and delete all associated channels and categories.\n\n**This action cannot be undone!**",
+        description=f"This will remove **{len(servers)} server(s)** and delete all associated channels and categories.\n\n**This action cannot be undone!**",
         color=COLOR_WARNING
     )
     
@@ -1069,14 +1068,14 @@ async def cleanup(ctx: discord.ApplicationContext):
         )
         await interaction.edit_original_response(embed=cleanup_embed, view=None)
         
-        servers_to_remove = list(guild_data[guild_id]["servers"].keys())
+        servers_to_remove = list(servers.keys())
         channels_deleted = 0
         categories_deleted = 0
         errors = []
         
         # Delete all server channels
         for server_key in servers_to_remove:
-            server_info = guild_data[guild_id]["servers"][server_key]
+            server_info = servers[server_key]
             
             # Delete voice channel
             try:
@@ -1115,14 +1114,13 @@ async def cleanup(ctx: discord.ApplicationContext):
             logger.error(f"Error deleting category: {e}")
             errors.append(f"Category: {str(e)}")
         
-        # Clear all server data
-        guild_data[guild_id]["servers"] = {}
-        await save_data()
+        # Clear all server data from database
+        deleted = await db.remove_guild_servers(guild_id)
         
         # Create final result embed
         result_embed = discord.Embed(
             title="✅ Cleanup Complete",
-            description=f"Successfully removed {len(servers_to_remove)} server(s)",
+            description=f"Successfully removed {deleted} server(s) from database",
             color=COLOR_INFO if not errors else COLOR_WARNING
         )
         
@@ -1154,11 +1152,8 @@ async def cleanup(ctx: discord.ApplicationContext):
 async def server_autocomplete(ctx: discord.AutocompleteContext):
     """Provide autocomplete options for server selection"""
     guild_id = str(ctx.interaction.guild.id)
-    if guild_id not in guild_data:
-        return []
-    
-    servers = guild_data[guild_id]["servers"]
-    return [key for key in servers.keys()]
+    servers = await db.get_guild_servers(guild_id)
+    return list(servers.keys())
 
 # Update the remove_server autocomplete
 remove_server.options[0].autocomplete = server_autocomplete
@@ -1168,22 +1163,11 @@ remove_server.options[0].autocomplete = server_autocomplete
 async def update_all_servers():
     """Update all tracked servers every configured interval"""
     try:
-        # Create a copy of the guild IDs to avoid modification during iteration
-        guild_ids = list(guild_data.keys())
+        # Get all guild servers from database
+        all_guilds_data = await db.get_all_guilds_servers()
         
-        for guild_id in guild_ids:
-            # Check if guild still exists in data (might have been removed)
-            if guild_id not in guild_data:
-                continue
-                
-            # Create a copy of server keys for this guild
-            server_keys = list(guild_data[guild_id]["servers"].keys())
-            
-            for server_key in server_keys:
-                # Check if server still exists (might have been removed)
-                if guild_id not in guild_data or server_key not in guild_data[guild_id]["servers"]:
-                    continue
-                    
+        for guild_id, servers in all_guilds_data.items():
+            for server_key in servers:
                 try:
                     await update_server_status(int(guild_id), server_key)
                     # Small delay between updates to spread out API calls
@@ -1222,12 +1206,11 @@ async def update_server_status(guild_id, server_key):
     """Update a specific server's status"""
     guild_id_str = str(guild_id)
     
-    # Check if data still exists
-    if guild_id_str not in guild_data or server_key not in guild_data[guild_id_str]["servers"]:
+    # Get server data from database
+    server_info = await db.get_server(guild_id_str, server_key)
+    if not server_info:
         logger.warning(f"Server {server_key} no longer exists in guild {guild_id}")
         return
-        
-    server_info = guild_data[guild_id_str]["servers"][server_key]
     
     # Get current status
     try:
@@ -1280,8 +1263,8 @@ async def update_server_status(guild_id, server_key):
             logger.info(f"Message not found for {server_key}, creating new one")
             embed = create_status_embed(status, server_info["address"], server_info.get("nickname"))
             message = await text_channel.send(embed=embed)
-            guild_data[guild_id_str]["servers"][server_key]["message_id"] = message.id
-            await save_data()
+            # Update message ID in database
+            await db.update_message_id(guild_id_str, server_key, message.id)
         except Exception as e:
             logger.error(f"Error updating message: {e}")
 
@@ -1340,11 +1323,11 @@ async def task_status(ctx: discord.ApplicationContext):
                 inline=False
             )
     
-    # Add server statistics
-    total_servers = sum(len(guild_data[g]["servers"]) for g in guild_data)
+    # Add server statistics from database
+    stats = await db.get_server_stats()
     embed.add_field(
         name="Statistics",
-        value=f"Guilds: {len(guild_data)}\nTotal Servers: {total_servers}\nUpdate Interval: {UPDATE_INTERVAL}s",
+        value=f"Guilds: {stats['guilds']}\nTotal Servers: {stats['total_servers']}\nUpdate Interval: {UPDATE_INTERVAL}s",
         inline=False
     )
     
